@@ -1,0 +1,29 @@
+{
+    "constants": {
+        "type": "oauth2",
+        "name": "oauth2",
+        "oauth": {
+            "requestTokenURL": "",
+            "accessTokenURL": "",
+            "userAuthorizationURL": "",
+            "consumerKey": "",
+            "consumerSecret": ""
+        },
+        "oauth2": {
+            "authorizationURL": "https://auth2.widora.cn/oauth2/authorize",
+            "tokenURL": "https://auth2.widora.cn/oauth2/token",
+            "clientID": "vsmh4lj8bakwho_q7d_1y7auu2l8jkgg",
+            "clientSecret": "3t_m5cs2ku7hbowidiooj7tbym8natlmcb5y0q4o4cf1snor78q_ndbl1vlnc2ss"
+        },
+        "userRoute": "https://auth2.widora.cn/oauth2/me/", 
+        "scope":"basic"
+    },
+    "profile": {
+        "id": "id",
+        "displayName": "displayName",
+        "emails": "emails"
+    },
+    "loginUrl": "https://auth.widora.cn:4000/pages/login-page",
+    "registerUrl": "https://auth.widora.cn:4000/pages/register-page",
+    "tokenIdField": "sub"
+}
