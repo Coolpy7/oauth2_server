@@ -56,7 +56,7 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	if *aliid == "" || *alikey == "" {
-		log.Fatal("sms access id or key has null")
+		log.Fatal("aliyun sms access id or key has null")
 	} else {
 		auth.AliyunSmsAccessID = *aliid
 		auth.AliyunSmsAccessKEY = *alikey
