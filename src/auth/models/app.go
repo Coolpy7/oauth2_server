@@ -23,4 +23,5 @@ type App struct {
 	SafeDownload       string `json:"safe_download,omitempty" bson:"safe_download,omitempty"`
 	SafeSocket         string `json:"safe_socket,omitempty" bson:"safe_socket,omitempty"`
 	DiscourseSsoSecret string `json:"discourse_sso_secret,omitempty" bson:"discourse_sso_secret,omitempty" jsonschema:"minLength=6"`
+	DiscourseSsoAdmin  string `json:"discourse_sso_admin,omitempty" bson:"discourse_sso_admin,omitempty"`
 }

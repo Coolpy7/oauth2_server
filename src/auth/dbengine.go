@@ -155,7 +155,7 @@ func (d *DbEngine) Open(mongo, mdb, domain, playdomain, sk string, init int) err
 		codetks := session.DB(mdb).C("codetokens")
 		err = codetks.EnsureIndex(mgo.Index{
 			Key:         []string{"createat"},
-			ExpireAfter: 30 * time.Second,
+			ExpireAfter: 5 * time.Minute,
 		})
 		err = codetks.EnsureIndex(mgo.Index{
 			Key: []string{"user_id"},

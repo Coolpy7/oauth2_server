@@ -242,7 +242,10 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		nonec := ssoq.Get("nonce")
 		reurl := ssoq.Get("return_sso_url")
 		redux := "nonce=" + nonec + "&email=" + u.Mail + "&external_id=" + u.Id.Hex() +
-			"&username=" + u.Uid + "&name=" + u.Name + "&avatar_url=" + u.Avatar + "&avatar_force_update=true&admin=true"
+			"&username=" + u.Uid + "&name=" + u.Name + "&avatar_url=" + u.Avatar + "&avatar_force_update=true"
+		if len(app.DiscourseSsoAdmin) > 0 && app.DiscourseSsoAdmin == u.Uid {
+			redux += "&admin=true"
+		}
 		baseredux := base64.StdEncoding.EncodeToString([]byte(redux))
 		nsig := ComputeHmac256(baseredux, app.DiscourseSsoSecret)
 		http.Redirect(w, r, reurl+"?sso="+baseredux+"&sig="+nsig, http.StatusTemporaryRedirect)
