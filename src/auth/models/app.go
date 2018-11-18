@@ -13,13 +13,14 @@ type App struct {
 
 	UserId bson.ObjectId `json:"user_id,omitempty" bson:"user_id,omitempty" jsonschema:"required,oid"`
 
-	AppId        string `json:"app_id,omitempty" bson:"app_id,omitempty" jsonschema:"required"`
-	AppSecret    string `json:"app_secret,omitempty" bson:"app_secret,omitempty" jsonschema:"required"`
-	Name         string `json:"name,omitempty" bson:"name,omitempty" jsonschema:"required,minLength=3,maxLength=10"`
-	Remark       string `json:"remark,omitempty" bson:"remark,omitempty"`
-	Avatar       string `json:"avatar,omitempty" bson:"avatar,omitempty"`
-	SafeRequest  string `json:"safe_request,omitempty" bson:"safe_request,omitempty" jsonschema:"required"`
-	SafeUpload   string `json:"safe_upload,omitempty" bson:"safe_upload,omitempty"`
-	SafeDownload string `json:"safe_download,omitempty" bson:"safe_download,omitempty"`
-	SafeSocket   string `json:"safe_socket,omitempty" bson:"safe_socket,omitempty"`
+	AppId              string `json:"app_id,omitempty" bson:"app_id,omitempty" jsonschema:"required"`
+	AppSecret          string `json:"app_secret,omitempty" bson:"app_secret,omitempty" jsonschema:"required"`
+	Name               string `json:"name,omitempty" bson:"name,omitempty" jsonschema:"required,minLength=3,maxLength=10"`
+	Remark             string `json:"remark,omitempty" bson:"remark,omitempty"`
+	Avatar             string `json:"avatar,omitempty" bson:"avatar,omitempty"`
+	SafeRequest        string `json:"safe_request,omitempty" bson:"safe_request,omitempty" jsonschema:"required"`
+	SafeUpload         string `json:"safe_upload,omitempty" bson:"safe_upload,omitempty"`
+	SafeDownload       string `json:"safe_download,omitempty" bson:"safe_download,omitempty"`
+	SafeSocket         string `json:"safe_socket,omitempty" bson:"safe_socket,omitempty"`
+	DiscourseSsoSecret string `json:"discourse_sso_secret,omitempty" bson:"discourse_sso_secret,omitempty" jsonschema:"minLength=6"`
 }

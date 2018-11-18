@@ -5,6 +5,9 @@ import (
 	"auth/models"
 	"auth/resultor"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/jacoblai/httprouter"
@@ -138,11 +141,14 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 	responseType := qr.Get("response_type")
 	scope := qr.Get("scope")
 	state := qr.Get("state")
+	sso := qr.Get("sso")
+	sig := qr.Get("sig")
 
 	codetoken := qr.Get("codetoken")
 
 	if !InjectionPass([]byte(codetoken)) || !InjectionPass([]byte(appid)) || !InjectionPass([]byte(redirectUri)) ||
-		!InjectionPass([]byte(responseType)) || !InjectionPass([]byte(scope)) || !InjectionPass([]byte(state)) {
+		!InjectionPass([]byte(responseType)) || !InjectionPass([]byte(scope)) || !InjectionPass([]byte(state)) ||
+		!InjectionPass([]byte(sso)) || !InjectionPass([]byte(sig)) {
 		http.Redirect(w, r, redirectUri+"?err=invalid_inject", http.StatusTemporaryRedirect)
 		return
 	}
@@ -152,25 +158,15 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		return
 	}
 
-	//if !validation.IsDomain(redirectUri) {
-	//	http.Redirect(w, r, redirectUri+"?err=invalid_redirect_uri", http.StatusTemporaryRedirect)
-	//	return
-	//}
-
 	if m, _ := regexp.MatchString(`^[a-z0-9_]+$`, appid); !m || len(appid) != 32 {
 		http.Redirect(w, r, redirectUri+"?err=invalid_app_account", http.StatusTemporaryRedirect)
 		return
 	}
 
-	if responseType != "code" {
-		http.Redirect(w, r, redirectUri+"?err=invalid_response_type", http.StatusTemporaryRedirect)
+	if scope != "basic" {
+		http.Redirect(w, r, redirectUri+"?err=invalid_scope", http.StatusTemporaryRedirect)
 		return
 	}
-
-	//if scope != "basic" {
-	//	http.Redirect(w, r, redirectUri+"?err=invalid_scope", http.StatusTemporaryRedirect)
-	//	return
-	//}
 
 	mg := d.GetSess()
 	defer mg.Close()
@@ -221,7 +217,37 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		authdb.Insert(&rcode)
 	}
 
-	http.Redirect(w, r, redirectUri+"?code="+code+"&state="+state, http.StatusTemporaryRedirect)
+	if responseType == "code" {
+		//if !validation.IsDomain(redirectUri) {
+		//	http.Redirect(w, r, redirectUri+"?err=invalid_redirect_uri", http.StatusTemporaryRedirect)
+		//	return
+		//}
+		http.Redirect(w, r, redirectUri+"?code="+code+"&state="+state, http.StatusTemporaryRedirect)
+		return
+	} else if responseType == "sso" && ComputeHmac256(sso, app.DiscourseSsoSecret) == sig {
+		//ssobts, err := base64.StdEncoding.DecodeString(sso)
+		//if err != nil {
+		//	http.Redirect(w, r, redirectUri+"?err=invalid_sso_base64", http.StatusTemporaryRedirect)
+		//	return
+		//}
+		//ssoq, err := url.ParseQuery(string(ssobts))
+		//if err != nil {
+		//	http.Redirect(w, r, redirectUri+"?err=invalid_sso_query", http.StatusTemporaryRedirect)
+		//	return
+		//}
+		//nonec := ssoq.Get("nonce")
+		//reurl := ssoq.Get("return_sso_url")
+
+	}
+
+	http.Redirect(w, r, redirectUri+"?err=invalid_response_type", http.StatusTemporaryRedirect)
+}
+
+func ComputeHmac256(message string, secret string) string {
+	key := []byte(secret)
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(message))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
