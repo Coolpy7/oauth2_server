@@ -107,6 +107,7 @@ func main() {
 	//授权记录管理
 	router.GET("/api/v1/auths", eng.LimitHandler(eng.Auth(eng.GetAuths), lmt))
 	router.GET("/api/v1/auth/:id", eng.LimitHandler(eng.Auth(eng.AuthDelete), lmt))
+	//https://test.icoolpy.com:8000/oauth2/authorize/?client_id=vsmh4lj8bakwho_q7d_1y7auu2l8jkgg&response_type=sso&scope=basic&state=state
 	//https://104.168.30.201:8000/oauth2/authorize/?client_id=1havh6c_qc1uk334bzu0nwhcykgcrch1&redirect_uri=http://baidu.com&response_type=code&scope=basic&state=state
 	router.GET("/oauth2/authorize", eng.LimitHandler(eng.Authorize, lmt))
 	router.POST("/oauth2/login", eng.LimitHandler(eng.AuthLogin, lmt))

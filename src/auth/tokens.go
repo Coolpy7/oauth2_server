@@ -194,53 +194,61 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 	//	return
 	//}
 
-	code := d.RandStringRunes(32)
-	codedb := d.GetColl(mg, "codes")
-	rcode := models.Code{
-		Id:       bson.NewObjectId(),
-		CreateAt: time.Now().Local(),
-		UserId:   ocd.UserId,
-		Code:     code,
-		AppId:    app.AppId,
-		Scope:    scope,
-	}
-	err = codedb.Insert(&rcode)
-	if err != nil {
-		http.Redirect(w, r, redirectUri+"?err=system_code_create_error", http.StatusTemporaryRedirect)
-		return
-	}
-
-	//添加用户授权记录，支持平台端收回授权
-	authdb := d.GetColl(mg, "auths")
-	act, _ := authdb.Find(bson.M{"user_id": ocd.UserId, "app_id": app.AppId}).Count()
-	if act == 0 {
-		authdb.Insert(&rcode)
-	}
-
 	if responseType == "code" {
 		//if !validation.IsDomain(redirectUri) {
 		//	http.Redirect(w, r, redirectUri+"?err=invalid_redirect_uri", http.StatusTemporaryRedirect)
 		//	return
 		//}
+		code := d.RandStringRunes(32)
+		codedb := d.GetColl(mg, "codes")
+		rcode := models.Code{
+			Id:       bson.NewObjectId(),
+			CreateAt: time.Now().Local(),
+			UserId:   ocd.UserId,
+			Code:     code,
+			AppId:    app.AppId,
+			Scope:    scope,
+		}
+		err = codedb.Insert(&rcode)
+		if err != nil {
+			http.Redirect(w, r, redirectUri+"?err=system_code_create_error", http.StatusTemporaryRedirect)
+			return
+		}
+		//添加用户授权记录，支持平台端收回授权
+		authdb := d.GetColl(mg, "auths")
+		act, _ := authdb.Find(bson.M{"user_id": ocd.UserId, "app_id": app.AppId}).Count()
+		if act == 0 {
+			authdb.Insert(&rcode)
+		}
 		http.Redirect(w, r, redirectUri+"?code="+code+"&state="+state, http.StatusTemporaryRedirect)
-		return
 	} else if responseType == "sso" && ComputeHmac256(sso, app.DiscourseSsoSecret) == sig {
-		//ssobts, err := base64.StdEncoding.DecodeString(sso)
-		//if err != nil {
-		//	http.Redirect(w, r, redirectUri+"?err=invalid_sso_base64", http.StatusTemporaryRedirect)
-		//	return
-		//}
-		//ssoq, err := url.ParseQuery(string(ssobts))
-		//if err != nil {
-		//	http.Redirect(w, r, redirectUri+"?err=invalid_sso_query", http.StatusTemporaryRedirect)
-		//	return
-		//}
-		//nonec := ssoq.Get("nonce")
-		//reurl := ssoq.Get("return_sso_url")
-
+		ssobts, err := base64.StdEncoding.DecodeString(sso)
+		if err != nil {
+			http.Redirect(w, r, redirectUri+"?err=invalid_sso_base64", http.StatusTemporaryRedirect)
+			return
+		}
+		ssoq, err := url.ParseQuery(string(ssobts))
+		if err != nil {
+			http.Redirect(w, r, redirectUri+"?err=invalid_sso_query", http.StatusTemporaryRedirect)
+			return
+		}
+		ag := d.GetColl(mg, "users")
+		var u models.User
+		err = ag.FindId(ocd.UserId).One(&u)
+		if err != nil {
+			http.Redirect(w, r, redirectUri+"?err=invalid_sso_user_not_found", http.StatusTemporaryRedirect)
+			return
+		}
+		nonec := ssoq.Get("nonce")
+		reurl := ssoq.Get("return_sso_url")
+		redux := "nonce=" + nonec + "&email=" + u.Mail + "&external_id=" + u.Id.Hex() +
+			"&username=" + u.Uid + "&name=" + u.Name + "&avatar_url=" + u.Avatar + "&avatar_force_update=true&admin=true"
+		baseredux := base64.StdEncoding.EncodeToString([]byte(redux))
+		nsig := ComputeHmac256(baseredux, app.DiscourseSsoSecret)
+		http.Redirect(w, r, reurl+"?sso="+baseredux+"&sig="+nsig, http.StatusTemporaryRedirect)
+	} else {
+		http.Redirect(w, r, redirectUri+"?err=invalid_response_type", http.StatusTemporaryRedirect)
 	}
-
-	http.Redirect(w, r, redirectUri+"?err=invalid_response_type", http.StatusTemporaryRedirect)
 }
 
 func ComputeHmac256(message string, secret string) string {
