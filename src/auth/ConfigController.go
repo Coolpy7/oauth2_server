@@ -12,12 +12,12 @@ import (
 func (d *DbEngine) GetConfig(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	defer r.Body.Close()
 
-	////用户信息
-	//rule := r.Header.Get("rule")
-	//if rule != "admin" {
-	//	resultor.RetErr(w, "账号权限不足")
-	//	return
-	//}
+	//用户信息
+	rule := r.Header.Get("rule")
+	if rule != "admin" {
+		resultor.RetErr(w, "账号权限不足")
+		return
+	}
 
 	mg := d.GetSess()
 	defer mg.Close()
