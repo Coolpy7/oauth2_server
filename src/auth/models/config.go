@@ -1,12 +1,12 @@
 package models
 
 import (
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Config struct {
-	Id     bson.ObjectId `json:"id" bson:"_id,omitempty" jsonschema:"-"`
-	Header string        `json:"header,omitempty" bson:"header,omitempty"`
+	Id     primitive.ObjectID `json:"id" bson:"_id,omitempty" jsonschema:"-"`
+	Header string             `json:"header,omitempty" bson:"header,omitempty"`
 	//Footer     string        `json:"footer,omitempty" bson:"footer,omitempty"`
 	//FooterUrl  string        `json:"footerurl,omitempty" bson:"footerurl,omitempty"`
 	RegPaper    string `json:"regpaper,omitempty" bson:"regpaper,omitempty"`

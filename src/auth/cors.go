@@ -3,7 +3,7 @@ package auth
 import "net/http"
 
 const (
-	options       = "OPTIONS"
+	corsOptions   = "OPTIONS"
 	allow_origin  = "Access-Control-Allow-Origin"
 	allow_methods = "Access-Control-Allow-Methods"
 	allow_headers = "Access-Control-Allow-Headers"
@@ -28,7 +28,7 @@ func CORS(next http.Handler) http.Handler {
 		w.Header().Set(allow_methods, methods)
 
 		// If this was preflight options request let's write empty ok response and return
-		if r.Method == options {
+		if r.Method == corsOptions {
 			w.WriteHeader(http.StatusOK)
 			w.Write(nil)
 			return

@@ -2,12 +2,12 @@ package models
 
 import (
 	"github.com/dgrijalva/jwt-go"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type CoolpyClaims struct {
-	UserId bson.ObjectId `json:"user_id"`
-	Uid    string        `json:"uid"`
-	Rule   string        `json:"rule"`
+	UserId primitive.ObjectID `json:"user_id"`
+	Uid    string             `json:"uid"`
+	Rule   string             `json:"rule"`
 	jwt.StandardClaims
 }

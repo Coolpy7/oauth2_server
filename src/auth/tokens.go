@@ -5,6 +5,7 @@ import (
 	"auth/models"
 	"auth/resultor"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,7 +13,8 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/jacoblai/httprouter"
 	"github.com/pquerna/ffjson/ffjson"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -70,24 +72,27 @@ func (d *DbEngine) AuthLogin(w http.ResponseWriter, r *http.Request, ps httprout
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	dls := d.GetColl(mg, "denylogins")
+	dls := d.GetColl("denylogins")
 	var dl models.DenyLogin
-	dls.Find(bson.M{"uid": obj["uid"]}).One(&dl)
+	re := dls.FindOne(context.Background(), bson.M{"uid": obj["uid"]})
+	if re.Err() != nil {
+		resultor.RetErr(w, re.Err().Error())
+		return
+	}
+	_ = re.Decode(&dl)
 	if dl.Count != nil && *dl.Count >= 5 {
 		resultor.RetErr(w, "已超过容错次数，请十五分钟后再试")
 		return
 	}
 
-	ag := d.GetColl(mg, "users")
+	ag := d.GetColl("users")
 	var u models.User
-	err = ag.Find(bson.M{"uid": obj["uid"]}).One(&u)
-	if err != nil {
+	re = ag.FindOne(context.Background(), bson.M{"uid": obj["uid"]})
+	if re.Err() != nil {
 		resultor.RetErr(w, "用户不存在")
 		return
 	}
+	_ = re.Decode(&u)
 
 	opwdbts, err := hex.DecodeString(u.Pwd)
 	if err != nil {
@@ -98,23 +103,23 @@ func (d *DbEngine) AuthLogin(w http.ResponseWriter, r *http.Request, ps httprout
 	if !bytes.Equal([]byte(obj["pwd"].(string)), opwd) {
 		if dl.Count == nil {
 			nv := float64(1)
-			dls.Insert(models.DenyLogin{
-				Id:       bson.NewObjectId(),
+			_, _ = dls.InsertOne(context.Background(), models.DenyLogin{
+				Id:       primitive.NewObjectID(),
 				CreateAt: time.Now().Local(),
 				Uid:      obj["uid"].(string),
 				Count:    &nv,
 			})
 		} else {
-			dls.Update(bson.M{"uid": obj["uid"].(string)}, bson.M{"$inc": bson.M{"count": 1}})
+			dls.FindOneAndUpdate(context.Background(), bson.M{"uid": obj["uid"].(string)}, bson.M{"$inc": bson.M{"count": 1}})
 		}
 		resultor.RetErr(w, "登陆失败，密码错误")
 		return
 	}
 
 	codetk := d.RandStringRunes(32)
-	codetkdb := d.GetColl(mg, "codetokens")
-	err = codetkdb.Insert(&models.CodeToken{
-		Id:       bson.NewObjectId(),
+	codetkdb := d.GetColl("codetokens")
+	_, err = codetkdb.InsertOne(context.Background(), &models.CodeToken{
+		Id:       primitive.NewObjectID(),
 		CreateAt: time.Now().Local(),
 		UserId:   u.Id,
 		Code:     codetk,
@@ -168,25 +173,24 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	codetkdb := d.GetColl(mg, "codetokens")
+	codetkdb := d.GetColl("codetokens")
 	var ocd models.CodeToken
-	err := codetkdb.Find(bson.M{"code": codetoken}).One(&ocd)
-	if err != nil {
+	re := codetkdb.FindOne(context.Background(), bson.M{"code": codetoken})
+	if re.Err() != nil {
 		http.Redirect(w, r, redirectUri+"?err=invalid_code_token", http.StatusTemporaryRedirect)
 		return
 	}
-	codetkdb.Remove(bson.M{"code": codetoken})
+	_ = re.Decode(&ocd)
+	codetkdb.FindOneAndDelete(context.Background(), bson.M{"code": codetoken})
 
-	appdb := d.GetColl(mg, "apps")
+	appdb := d.GetColl("apps")
 	var app models.App
-	err = appdb.Find(bson.M{"app_id": appid}).One(&app)
-	if err != nil {
+	re = appdb.FindOne(context.Background(), bson.M{"app_id": appid})
+	if re.Err() != nil {
 		http.Redirect(w, r, redirectUri+"?err=invalid_app_account_notfount", http.StatusTemporaryRedirect)
 		return
 	}
+	_ = re.Decode(&app)
 
 	//safe, _ := url.Parse(app.SafeRequest)
 	//if r.Host != safe.Host {
@@ -200,25 +204,25 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		//	return
 		//}
 		code := d.RandStringRunes(32)
-		codedb := d.GetColl(mg, "codes")
+		codedb := d.GetColl("codes")
 		rcode := models.Code{
-			Id:       bson.NewObjectId(),
+			Id:       primitive.NewObjectID(),
 			CreateAt: time.Now().Local(),
 			UserId:   ocd.UserId,
 			Code:     code,
 			AppId:    app.AppId,
 			Scope:    scope,
 		}
-		err = codedb.Insert(&rcode)
+		_, err := codedb.InsertOne(context.Background(), &rcode)
 		if err != nil {
 			http.Redirect(w, r, redirectUri+"?err=system_code_create_error", http.StatusTemporaryRedirect)
 			return
 		}
 		//添加用户授权记录，支持平台端收回授权
-		authdb := d.GetColl(mg, "auths")
-		act, _ := authdb.Find(bson.M{"user_id": ocd.UserId, "app_id": app.AppId}).Count()
+		authdb := d.GetColl("auths")
+		act, _ := authdb.CountDocuments(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": app.AppId})
 		if act == 0 {
-			authdb.Insert(&rcode)
+			_, _ = authdb.InsertOne(context.Background(), &rcode)
 		}
 		http.Redirect(w, r, redirectUri+"?code="+code+"&state="+state, http.StatusTemporaryRedirect)
 	} else if responseType == "sso" && ComputeHmac256(sso, app.DiscourseSsoSecret) == sig {
@@ -232,13 +236,14 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 			http.Redirect(w, r, redirectUri+"?err=invalid_sso_query", http.StatusTemporaryRedirect)
 			return
 		}
-		ag := d.GetColl(mg, "users")
+		ag := d.GetColl("users")
 		var u models.User
-		err = ag.FindId(ocd.UserId).One(&u)
-		if err != nil {
+		re = ag.FindOne(context.Background(), ocd.UserId)
+		if re.Err() != nil {
 			http.Redirect(w, r, redirectUri+"?err=invalid_sso_user_not_found", http.StatusTemporaryRedirect)
 			return
 		}
+		_ = re.Decode(&u)
 		nonec := ssoq.Get("nonce")
 		reurl := ssoq.Get("return_sso_url")
 		redux := "nonce=" + nonec + "&email=" + u.Mail + "&external_id=" + u.Id.Hex() +
@@ -318,30 +323,29 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	codedb := d.GetColl(mg, "codes")
+	codedb := d.GetColl("codes")
 	var ocd models.Code
-	err = codedb.Find(bson.M{"code": code}).One(&ocd)
-	if err != nil {
+	re := codedb.FindOne(context.Background(), bson.M{"code": code})
+	if re.Err() != nil {
 		resultor.RetErr(w, "invalid_code_notfound")
 		return
 	}
-	codedb.Remove(bson.M{"code": code})
+	_ = re.Decode(&ocd)
+	codedb.FindOneAndDelete(context.Background(), bson.M{"code": code})
 
 	if ocd.AppId != appid {
 		resultor.RetErr(w, "invalid_appid_notfound")
 		return
 	}
 
-	appdb := d.GetColl(mg, "apps")
+	appdb := d.GetColl("apps")
 	var app models.App
-	err = appdb.Find(bson.M{"app_id": appid, "app_secret": secret}).One(&app)
-	if err != nil {
+	re = appdb.FindOne(context.Background(), bson.M{"app_id": appid, "app_secret": secret})
+	if re.Err() != nil {
 		resultor.RetErr(w, "invalid_appsecret_notfound")
 		return
 	}
+	_ = re.Decode(&app)
 
 	//safe, _ := url.Parse(app.SafeRequest)
 	//if r.Host != safe.Host {
@@ -350,20 +354,21 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 	//}
 
 	//判断授权信息是否已被回收授权
-	authdb := d.GetColl(mg, "auths")
-	act, _ := authdb.Find(bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}).Count()
+	authdb := d.GetColl("auths")
+	act, _ := authdb.CountDocuments(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId})
 	if act == 0 {
 		resultor.RetErr(w, "invalid_oauth_reject")
 		return
 	}
 
-	ag := d.GetColl(mg, "users")
+	ag := d.GetColl("users")
 	var u models.User
-	err = ag.FindId(ocd.UserId).One(&u)
-	if err != nil {
+	re = ag.FindOne(context.Background(), ocd.UserId)
+	if re.Err() != nil {
 		resultor.RetErr(w, "授权用户不存在")
 		return
 	}
+	_ = re.Decode(&u)
 
 	refreshToken := d.RandStringRunes(128)
 	now := time.Now().Local()
@@ -382,8 +387,8 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 		resultor.RetErr(w, err.Error())
 		return
 	}
-	err = authdb.Update(bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
-	if err != nil {
+	re = authdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
@@ -414,24 +419,23 @@ func (d *DbEngine) RefreshToken(w http.ResponseWriter, r *http.Request, ps httpr
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	authdb := d.GetColl(mg, "auths")
+	authdb := d.GetColl("auths")
 	var ocd models.Code
-	err := authdb.Find(bson.M{"code": rtoken}).One(&ocd)
-	if err != nil {
+	re := authdb.FindOne(context.Background(), bson.M{"code": rtoken})
+	if re.Err() != nil {
 		resultor.RetErr(w, "invalid_refresh_token_notfound")
 		return
 	}
+	_ = re.Decode(&ocd)
 
-	ag := d.GetColl(mg, "users")
+	ag := d.GetColl("users")
 	var u models.User
-	err = ag.FindId(ocd.UserId).One(&u)
-	if err != nil {
+	re = ag.FindOne(context.Background(), bson.M{"_id": ocd.UserId})
+	if re.Err() != nil {
 		resultor.RetErr(w, "授权用户不存在")
 		return
 	}
+	_ = re.Decode(&u)
 
 	refreshToken := d.RandStringRunes(128)
 	now := time.Now().Local()
@@ -449,8 +453,8 @@ func (d *DbEngine) RefreshToken(w http.ResponseWriter, r *http.Request, ps httpr
 		resultor.RetErr(w, err.Error())
 		return
 	}
-	err = authdb.Update(bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
-	if err != nil {
+	re = authdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
@@ -483,25 +487,25 @@ func (d *DbEngine) MeInfo(w http.ResponseWriter, r *http.Request, ps httprouter.
 	})
 
 	if tk, ok := rtoken.Claims.(*jwt.StandardClaims); ok && rtoken.Valid && tk.Issuer == "coolpy7_oauth" {
-		mg := d.GetSess()
-		defer mg.Close()
-
+		uoid, _ := primitive.ObjectIDFromHex(uid)
 		//判断授权信息是否已被回收授权
-		authdb := d.GetColl(mg, "auths")
+		authdb := d.GetColl("auths")
 		var act models.Code
-		err := authdb.Find(bson.M{"user_id": bson.ObjectIdHex(uid), "app_id": tk.Audience}).One(&act)
-		if err != nil {
+		re := authdb.FindOne(context.Background(), bson.M{"user_id": uoid, "app_id": tk.Audience})
+		if re.Err() != nil {
 			resultor.RetErr(w, "invalid_oauth_reject")
 			return
 		}
+		_ = re.Decode(&act)
 
-		ag := d.GetColl(mg, "users")
+		ag := d.GetColl("users")
 		var u models.User
-		err = ag.FindId(act.UserId).One(&u)
-		if err != nil {
+		re = ag.FindOne(context.Background(), act.UserId)
+		if re.Err() != nil {
 			resultor.RetErr(w, "授权用户不存在")
 			return
 		}
+		_ = re.Decode(&u)
 
 		res := make(map[string]interface{})
 		res["id"] = tk.Subject

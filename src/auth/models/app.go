@@ -1,17 +1,19 @@
 package models
 
 import (
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"time"
 )
 
-type App struct {
-	Id        bson.ObjectId `json:"id" bson:"_id,omitempty" jsonschema:"-"`
-	CreateAt  time.Time     `json:"create_at,omitempty" bson:"create_at,omitempty"`
-	UpdateAt  time.Time     `json:"update_at,omitempty" bson:"update_at,omitempty"`
-	IsDisable *bool         `json:"is_disable,omitempty" bson:"is_disable,omitempty"`
+var T_APP = "apps"
 
-	UserId bson.ObjectId `json:"user_id,omitempty" bson:"user_id,omitempty" jsonschema:"required,oid"`
+type App struct {
+	Id        primitive.ObjectID `json:"id" bson:"_id,omitempty" jsonschema:"-"`
+	CreateAt  time.Time          `json:"create_at,omitempty" bson:"create_at,omitempty"`
+	UpdateAt  time.Time          `json:"update_at,omitempty" bson:"update_at,omitempty"`
+	IsDisable *bool              `json:"is_disable,omitempty" bson:"is_disable,omitempty"`
+
+	UserId primitive.ObjectID `json:"user_id,omitempty" bson:"user_id,omitempty" jsonschema:"required,oid"`
 
 	AppId              string `json:"app_id,omitempty" bson:"app_id,omitempty" jsonschema:"required"`
 	AppSecret          string `json:"app_secret,omitempty" bson:"app_secret,omitempty" jsonschema:"required"`

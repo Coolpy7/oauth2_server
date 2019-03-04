@@ -3,8 +3,10 @@ package auth
 import (
 	"auth/models"
 	"auth/resultor"
+	"context"
 	"github.com/jacoblai/httprouter"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net/http"
 	"strconv"
 )
@@ -23,12 +25,14 @@ func (d *DbEngine) GetAuths(w http.ResponseWriter, r *http.Request, ps httproute
 
 	//用户信息
 	uoid := r.Header.Get("uoid")
+	puoid, err := primitive.ObjectIDFromHex(uoid)
+	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	c := d.GetColl(mg, "auths")
-	cond := bson.M{"user_id": bson.ObjectIdHex(uoid)}
+	c := d.GetColl("auths")
+	cond := bson.M{"user_id": puoid}
 	query := make([]map[string]interface{}, 0)
 	query = append(query, bson.M{"$match": cond})
 	query = append(query, bson.M{"$lookup": bson.M{
@@ -45,40 +49,54 @@ func (d *DbEngine) GetAuths(w http.ResponseWriter, r *http.Request, ps httproute
 	}
 	query = append(query, bson.M{"$sort": bson.M{"createat": -1}})
 	var objs []map[string]interface{}
-	if err := c.Pipe(query).All(&objs); err != nil {
+	re, err := c.Aggregate(context.Background(), query)
+	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
-	ct, _ := c.Find(cond).Count()
-	resultor.RetOk(w, &objs, ct)
+	for re.Next(context.Background()) {
+		var m map[string]interface{}
+		_ = re.Decode(&m)
+		objs = append(objs, m)
+	}
+	ct, _ := c.CountDocuments(context.Background(), cond)
+	resultor.RetOk(w, &objs, int(ct))
 }
 
 func (d *DbEngine) AuthDelete(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	defer r.Body.Close()
 
 	authid := ps.ByName("id")
-	if authid == "" || !InjectionPass([]byte(authid)) || !bson.IsObjectIdHex(authid) {
+	if authid == "" || !InjectionPass([]byte(authid)) {
+		resultor.RetErr(w, "1003")
+		return
+	}
+	authoid, err := primitive.ObjectIDFromHex(authid)
+	if err != nil {
 		resultor.RetErr(w, "1003")
 		return
 	}
 
 	//用户信息
 	uoid := r.Header.Get("uoid")
-
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
-	var u models.User
-	err := ag.FindId(bson.ObjectIdHex(uoid)).One(&u)
+	puoid, err := primitive.ObjectIDFromHex(uoid)
 	if err != nil {
-		resultor.RetErr(w, "用户不存在")
+		resultor.RetErr(w, "1003")
 		return
 	}
 
-	c := d.GetColl(mg, "auths")
-	err = c.Remove(bson.M{"user_id": u.Id, "_id": bson.ObjectIdHex(authid)})
-	if err != nil {
+	ag := d.GetColl("users")
+	var u models.User
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid})
+	if re.Err() != nil {
+		resultor.RetErr(w, "用户不存在")
+		return
+	}
+	_ = re.Decode(&u)
+
+	c := d.GetColl("auths")
+	re = c.FindOneAndDelete(context.Background(), bson.M{"user_id": u.Id, "_id": authoid})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}

@@ -2,9 +2,12 @@ package auth
 
 import (
 	"auth/resultor"
+	"context"
 	"github.com/jacoblai/httprouter"
 	"github.com/pquerna/ffjson/ffjson"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"io/ioutil"
 	"net/http"
 )
@@ -18,17 +21,20 @@ func (d *DbEngine) GetConfig(w http.ResponseWriter, r *http.Request, ps httprout
 		resultor.RetErr(w, "账号权限不足")
 		return
 	}
-
-	mg := d.GetSess()
-	defer mg.Close()
-
-	c := d.GetColl(mg, "configs")
-	var objs map[string]interface{}
-	err := c.FindId(bson.ObjectIdHex("5bae43aa53c61312eec64c04")).One(&objs)
+	oid, err := primitive.ObjectIDFromHex("5bae43aa53c61312eec64c04")
 	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
+
+	c := d.GetColl("configs")
+	var objs map[string]interface{}
+	re := c.FindOne(context.Background(), bson.M{"_id": oid})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
+	_ = re.Decode(&objs)
 	resultor.RetOk(w, &objs, 1)
 }
 
@@ -71,12 +77,15 @@ func (d *DbEngine) PutConfig(w http.ResponseWriter, r *http.Request, ps httprout
 	//	}
 	//}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	c := d.GetColl(mg, "configs")
-	_, err = c.Upsert(bson.M{"_id": bson.ObjectIdHex("5bae43aa53c61312eec64c04")}, bson.M{"$set": obj})
+	oid, err := primitive.ObjectIDFromHex("5bae43aa53c61312eec64c04")
 	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
+
+	c := d.GetColl("configs")
+	re := c.FindOneAndUpdate(context.Background(), bson.M{"_id": oid}, bson.M{"$set": obj}, options.FindOneAndUpdate().SetUpsert(true))
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}

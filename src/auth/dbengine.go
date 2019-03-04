@@ -3,12 +3,18 @@ package auth
 import (
 	"auth/jcrypt"
 	"auth/models"
+	"context"
 	"encoding/hex"
 	"github.com/GiterLab/aliyun-sms-go-sdk/dysms"
 	"github.com/jacoblai/mschema"
 	"github.com/pquerna/ffjson/ffjson"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/x/bsonx"
 	"log"
 	"math/rand"
 	"time"
@@ -20,7 +26,7 @@ var (
 )
 
 type DbEngine struct {
-	MgEngine       *mgo.Session //关系型数据库引擎
+	MgEngine       *mongo.Client //关系型数据库引擎
 	Mdb            string
 	SigningKey     []byte
 	rnd            *rand.Rand
@@ -46,53 +52,65 @@ func (d *DbEngine) RandStringRunes(n int) string {
 	return string(b)
 }
 
-func (d *DbEngine) Open(mongo, mdb, domain, playdomain, sk string, init int) error {
+func (d *DbEngine) Open(mg, mdb, domain, playdomain, sk string, init int) error {
 	d.Mdb = mdb
 	d.Domain = domain
 	d.PlayDomainName = playdomain
 	d.SigningKey = []byte(sk)
-	db, err := mgo.Dial(mongo)
+
+	ops := options.Client().ApplyURI(mg)
+	p := uint16(39000)
+	ops.MaxPoolSize = &p
+	ops.WriteConcern = writeconcern.New(writeconcern.J(true), writeconcern.W(1))
+	ops.ReadPreference = readpref.PrimaryPreferred()
+	mgClient, err := mongo.NewClient(ops)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	d.MgEngine = db
-	d.MgEngine.SetSafe(&mgo.Safe{})
-	d.MgEngine.SetMode(mgo.Monotonic, true)
-	d.MgEngine.SetPoolLimit(39000)
+	d.MgEngine = mgClient
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err = d.MgEngine.Connect(ctx)
+	if err != nil {
+		return err
+	}
+	err = d.MgEngine.Ping(ctx, readpref.PrimaryPreferred())
+	if err != nil {
+		log.Println("ping err", err.Error())
+	}
 
 	//初始化数据库
 	if init == 1 {
-		session, err := mgo.Dial(mongo)
+		session, err := mongo.NewClient(ops)
 		if err != nil {
 			panic(err)
 		}
-		defer session.Close()
-		// Optional. Switch the session to a monotonic behavior.
-		session.SetMode(mgo.Monotonic, true)
-		session.SetSafe(&mgo.Safe{})
+		err = session.Connect(context.Background())
+		if err != nil {
+			panic(err)
+		}
 		//user表
-		res := InitDbAndColl(session, mdb, "users", GenJsonSchema(&models.User{}))
-		u := session.DB(mdb).C("users")
-		err = u.EnsureIndex(mgo.Index{
-			Key:    []string{"uid"},
-			Unique: true,
+		res := InitDbAndColl(session, mdb, models.T_USER, GenJsonSchema(&models.User{}))
+		u := session.Database(mdb).Collection(models.T_USER)
+		indexview := u.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys:    bsonx.Doc{{"uid", bsonx.Int32(1)}},
+				Options: options.Index().SetUnique(true),
+			},
+			{
+				Keys: bsonx.Doc{{"phone", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
-		err = u.EnsureIndex(mgo.Index{
-			Key:    []string{"phone"},
-			Unique: true,
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		ct, _ := u.Find(bson.M{"uid": "admin"}).Count()
+		ct, _ := u.CountDocuments(context.Background(), bson.M{"uid": "admin"})
 		if ct == 0 {
 			stat := false
 			t := time.Now().Local()
 			var obj models.User
-			obj.Id = bson.NewObjectId()
+			obj.Id = primitive.NewObjectID()
 			obj.CreateAt = t
 			obj.IsDisable = &stat
 			obj.Uid = "admin"
@@ -100,189 +118,182 @@ func (d *DbEngine) Open(mongo, mdb, domain, playdomain, sk string, init int) err
 			obj.Name = "系统管理员"
 			obj.Phone = "13800000000"
 			obj.Rule = "admin"
-			u.Insert(&obj)
+			_, _ = u.InsertOne(context.Background(), &obj)
 		}
-		res = InitDbAndColl(session, mdb, "smss", GenJsonSchema(&models.Sms{}))
+		res = InitDbAndColl(session, mdb, models.T_SMSS, GenJsonSchema(&models.Sms{}))
 		log.Println(res)
-		sms := session.DB(mdb).C("smss")
-		err = sms.EnsureIndex(mgo.Index{
-			Key:         []string{"createat"},
-			ExpireAfter: 15 * time.Minute,
-		})
-		err = sms.EnsureIndex(mgo.Index{
-			Key: []string{"code", "phone"},
+		sms := session.Database(mdb).Collection(models.T_SMSS)
+		indexview = sms.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys:    bsonx.Doc{{"createat", bsonx.Int32(1)}},
+				Options: options.Index().SetExpireAfterSeconds(15 * 60),
+			},
+			{
+				Keys: bsonx.Doc{{"phone", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"code", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
 		//登陆限制表
-		res = InitDbAndColl(session, mdb, "denylogins", GenJsonSchema(&models.DenyLogin{}))
+		res = InitDbAndColl(session, mdb, models.T_DenyLogin, GenJsonSchema(&models.DenyLogin{}))
 		log.Println(res)
-		dls := session.DB(mdb).C("denylogins")
-		err = dls.EnsureIndex(mgo.Index{
-			Key:         []string{"createat"},
-			ExpireAfter: 15 * time.Minute,
-		})
-		err = dls.EnsureIndex(mgo.Index{
-			Key: []string{"uid"},
+		dls := session.Database(mdb).Collection(models.T_DenyLogin)
+		indexview = dls.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys:    bsonx.Doc{{"createat", bsonx.Int32(1)}},
+				Options: options.Index().SetExpireAfterSeconds(15 * 60),
+			},
+			{
+				Keys: bsonx.Doc{{"uid", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
-		res = InitDbAndColl(session, mdb, "apps", GenJsonSchema(&models.App{}))
+		res = InitDbAndColl(session, mdb, models.T_APP, GenJsonSchema(&models.App{}))
 		log.Println(res)
-		apps := session.DB(mdb).C("apps")
-		err = apps.EnsureIndex(mgo.Index{
-			Key: []string{"user_id"},
+		apps := session.Database(mdb).Collection(models.T_APP)
+		indexview = apps.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys: bsonx.Doc{{"user_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"app_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"name", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
-		err = apps.EnsureIndex(mgo.Index{
-			Key: []string{"app_id"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		err = apps.EnsureIndex(mgo.Index{
-			Key: []string{"name"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		res = InitDbAndColl(session, mdb, "codetokens", GenJsonSchema(&models.CodeToken{}))
+		res = InitDbAndColl(session, mdb, models.T_CodeToken, GenJsonSchema(&models.CodeToken{}))
 		log.Println(res)
-		codetks := session.DB(mdb).C("codetokens")
-		err = codetks.EnsureIndex(mgo.Index{
-			Key:         []string{"createat"},
-			ExpireAfter: 5 * time.Minute,
-		})
-		err = codetks.EnsureIndex(mgo.Index{
-			Key: []string{"user_id"},
+		codetks := session.Database(mdb).Collection(models.T_CodeToken)
+		indexview = codetks.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys:    bsonx.Doc{{"createat", bsonx.Int32(1)}},
+				Options: options.Index().SetExpireAfterSeconds(5 * 60),
+			},
+			{
+				Keys: bsonx.Doc{{"user_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"code", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
-		err = codetks.EnsureIndex(mgo.Index{
-			Key: []string{"code"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		res = InitDbAndColl(session, mdb, "codes", GenJsonSchema(&models.Code{}))
+		res = InitDbAndColl(session, mdb, models.T_Code, GenJsonSchema(&models.Code{}))
 		log.Println(res)
-		cds := session.DB(mdb).C("codes")
-		err = cds.EnsureIndex(mgo.Index{
-			Key:         []string{"createat"},
-			ExpireAfter: 5 * time.Minute,
-		})
-		err = cds.EnsureIndex(mgo.Index{
-			Key: []string{"user_id"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		err = cds.EnsureIndex(mgo.Index{
-			Key: []string{"app_id"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		err = cds.EnsureIndex(mgo.Index{
-			Key: []string{"code"},
+		cds := session.Database(mdb).Collection(models.T_Code)
+		indexview = cds.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys:    bsonx.Doc{{"createat", bsonx.Int32(1)}},
+				Options: options.Index().SetExpireAfterSeconds(5 * 60),
+			},
+			{
+				Keys: bsonx.Doc{{"user_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"app_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"code", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
 		res = InitDbAndColl(session, mdb, "auths", GenJsonSchema(&models.Code{}))
 		log.Println(res)
-		ats := session.DB(mdb).C("auths")
-		err = ats.EnsureIndex(mgo.Index{
-			Key: []string{"user_id"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		err = ats.EnsureIndex(mgo.Index{
-			Key: []string{"app_id"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		err = ats.EnsureIndex(mgo.Index{
-			Key: []string{"code"},
+		ats := session.Database(mdb).Collection("auths")
+		indexview = ats.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys: bsonx.Doc{{"user_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"app_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"code", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
 		res = InitDbAndColl(session, mdb, "mailcodes", GenJsonSchema(&models.MailCode{}))
 		log.Println(res)
-		mks := session.DB(mdb).C("mailcodes")
-		err = mks.EnsureIndex(mgo.Index{
-			Key:         []string{"createat"},
-			ExpireAfter: 6 * time.Hour,
-		})
-		err = mks.EnsureIndex(mgo.Index{
-			Key: []string{"user_id"},
-		})
-		if err != nil {
-			log.Println(err)
-		}
-		err = mks.EnsureIndex(mgo.Index{
-			Key: []string{"code"},
+		mks := session.Database(mdb).Collection("mailcodes")
+		indexview = mks.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys:    bsonx.Doc{{"createat", bsonx.Int32(1)}},
+				Options: options.Index().SetExpireAfterSeconds(60 * 60 * 6),
+			},
+			{
+				Keys: bsonx.Doc{{"user_id", bsonx.Int32(1)}},
+			},
+			{
+				Keys: bsonx.Doc{{"code", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
 		res = InitDbAndColl(session, mdb, "forms", GenJsonSchema(&models.Form{}))
 		log.Println(res)
-		fs := session.DB(mdb).C("forms")
-		err = fs.EnsureIndex(mgo.Index{
-			Key: []string{"fromoid"},
+		fs := session.Database(mdb).Collection("forms")
+		indexview = fs.Indexes()
+		_, err = indexview.CreateMany(context.Background(), []mongo.IndexModel{
+			{
+				Keys: bsonx.Doc{{"fromoid", bsonx.Int32(1)}},
+			},
 		})
 		if err != nil {
 			log.Println(err)
 		}
 		res = InitDbAndColl(session, mdb, "configs", GenJsonSchema(&models.Config{}))
 		log.Println(res)
+
+		session.Disconnect(context.Background())
 	}
 
 	return nil
 }
 
-func (d *DbEngine) GetSess() *mgo.Session {
-	return d.MgEngine.Copy()
-}
-
-func (d *DbEngine) GetColl(mg *mgo.Session, coll string) *mgo.Collection {
-	return mg.DB(d.Mdb).C(coll)
-}
-
-func (d *DbEngine) GetGridfs(mg *mgo.Session, coll string) *mgo.GridFS {
-	return mg.DB(d.Mdb).GridFS(coll)
-}
-
-func InitDbAndColl(session *mgo.Session, db, coll string, model map[string]interface{}) map[string]interface{} {
-	result := bson.M{}
-	if !CheckCollExists(session.DB(db), coll) {
-		session.DB(db).C(coll).Create(&mgo.CollectionInfo{})
-	}
-	session.DB(db).Run(bson.D{{"collMod", coll}, {"validator", model}}, &result)
-	return result
-}
-
-func CheckCollExists(db *mgo.Database, coll string) bool {
-	names, err := db.CollectionNames()
+func (d *DbEngine) GetSess() (mongo.Session, error) {
+	session, err := d.MgEngine.StartSession(options.Session().SetDefaultReadPreference(readpref.Primary()))
 	if err != nil {
-		log.Printf("Failed to get coll names: %v", err)
+		return nil, err
 	}
+	return session, nil
+}
 
-	for _, name := range names {
-		if name == coll {
-			return true
-		}
+func (d *DbEngine) GetColl(coll string) *mongo.Collection {
+	col, _ := d.MgEngine.Database(d.Mdb).Collection(coll).Clone()
+	return col
+}
+
+func InitDbAndColl(session *mongo.Client, db, coll string, model map[string]interface{}) map[string]interface{} {
+	result := session.Database(db).RunCommand(context.Background(), bson.D{{"collMod", coll}, {"validator", model}})
+	var res map[string]interface{}
+	err := result.Decode(&res)
+	if err != nil {
+		log.Println(err)
 	}
-	return false
+	return res
 }
 
 //创建数据库验证schema结构对象
@@ -291,10 +302,10 @@ func GenJsonSchema(obj interface{}) map[string]interface{} {
 	ob := flect.Reflect(obj)
 	bts, _ := ffjson.Marshal(&ob)
 	var o map[string]interface{}
-	ffjson.Unmarshal(bts, &o)
+	_ = ffjson.Unmarshal(bts, &o)
 	return bson.M{"$jsonSchema": o}
 }
 
 func (d *DbEngine) Close() {
-	d.MgEngine.Close()
+	d.MgEngine.Disconnect(context.Background())
 }

@@ -5,13 +5,15 @@ import (
 	"auth/models"
 	"auth/resultor"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/jacoblai/httprouter"
 	"github.com/jacoblai/validation"
 	"github.com/pquerna/ffjson/ffjson"
 	"github.com/satori/go.uuid"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -82,24 +84,27 @@ func (d *DbEngine) GetApiToken(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	dls := d.GetColl(mg, "denylogins")
+	dls := d.GetColl(models.T_DenyLogin)
 	var dl models.DenyLogin
-	dls.Find(bson.M{"uid": obj["uid"]}).One(&dl)
+	re := dls.FindOne(context.Background(), bson.M{"uid": obj["uid"]})
+	if re.Err() != nil {
+		resultor.RetErr(w, re.Err().Error())
+		return
+	}
+	_ = re.Decode(&dl)
 	if dl.Count != nil && *dl.Count >= 5 {
 		resultor.RetErr(w, "已超过容错次数，请十五分钟后再试")
 		return
 	}
 
-	ag := d.GetColl(mg, "users")
+	ag := d.GetColl(models.T_USER)
 	var u models.User
-	err = ag.Find(bson.M{kind: obj["uid"]}).One(&u)
-	if err != nil {
+	re = ag.FindOne(context.Background(), bson.M{kind: obj["uid"]})
+	if re.Err() != nil {
 		resultor.RetErr(w, "用户不存在")
 		return
 	}
+	_ = re.Decode(&u)
 
 	opwdbts, err := hex.DecodeString(u.Pwd)
 	if err != nil {
@@ -110,14 +115,14 @@ func (d *DbEngine) GetApiToken(w http.ResponseWriter, r *http.Request, ps httpro
 	if !bytes.Equal([]byte(obj["pwd"].(string)), opwd) {
 		if dl.Count == nil {
 			nv := float64(1)
-			dls.Insert(models.DenyLogin{
-				Id:       bson.NewObjectId(),
+			_, _ = dls.InsertOne(context.Background(), models.DenyLogin{
+				Id:       primitive.NewObjectID(),
 				CreateAt: time.Now().Local(),
 				Uid:      obj["uid"].(string),
 				Count:    &nv,
 			})
 		} else {
-			dls.Update(bson.M{"uid": obj["uid"].(string)}, bson.M{"$inc": bson.M{"count": 1}})
+			dls.FindOneAndUpdate(context.Background(), bson.M{"uid": obj["uid"].(string)}, bson.M{"$inc": bson.M{"count": 1}})
 		}
 		resultor.RetErr(w, "登陆失败，密码错误")
 		return

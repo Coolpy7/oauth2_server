@@ -1,16 +1,18 @@
 package models
 
 import (
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"time"
 )
 
+var T_USER = "users"
+
 //系统用户账号
 type User struct {
-	Id        bson.ObjectId `json:"id" bson:"_id,omitempty" jsonschema:"-"`
-	CreateAt  time.Time     `json:"createat,omitempty" bson:"createat,omitempty"`
-	UpdateAt  time.Time     `json:"updateat,omitempty" bson:"updateat,omitempty"`
-	IsDisable *bool         `json:"isdisable,omitempty" bson:"isdisable,omitempty"`
+	Id        primitive.ObjectID `json:"id" bson:"_id,omitempty" jsonschema:"-"`
+	CreateAt  time.Time          `json:"createat,omitempty" bson:"createat,omitempty"`
+	UpdateAt  time.Time          `json:"updateat,omitempty" bson:"updateat,omitempty"`
+	IsDisable *bool              `json:"isdisable,omitempty" bson:"isdisable,omitempty"`
 
 	Uid    string `json:"uid,omitempty" bson:"uid,omitempty" jsonschema:"required,minLength=3,maxLength=16"`
 	Pwd    string `json:"pwd,omitempty" bson:"pwd,omitempty" jsonschema:"required,minLength=6,maxLength=64"`

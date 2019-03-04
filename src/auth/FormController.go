@@ -3,9 +3,13 @@ package auth
 import (
 	"auth/models"
 	"auth/resultor"
+	"context"
+	"errors"
 	"github.com/jacoblai/httprouter"
 	"github.com/pquerna/ffjson/ffjson"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"io/ioutil"
 	"net/http"
 	"strconv"
@@ -45,13 +49,14 @@ func (d *DbEngine) AddForm(w http.ResponseWriter, r *http.Request, ps httprouter
 		resultor.RetErr(w, "只允许普通用户申请成为开发者")
 		return
 	}
+	puoid, err := primitive.ObjectIDFromHex(uoid)
+	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	formdb := d.GetColl(mg, "forms")
-
-	ct, _ := formdb.Find(bson.M{"useroid": bson.ObjectId(uoid), "state": "待审核"}).Count()
+	formdb := d.GetColl("forms")
+	ct, _ := formdb.CountDocuments(context.Background(), bson.M{"useroid": puoid, "state": "待审核"})
 	if ct > 0 {
 		resultor.RetErr(w, "你已有待审核申请，请联系管理员审核申请记录")
 		return
@@ -59,12 +64,12 @@ func (d *DbEngine) AddForm(w http.ResponseWriter, r *http.Request, ps httprouter
 
 	stat := false
 	t := time.Now().Local()
-	obj.Id = bson.NewObjectId()
+	obj.Id = primitive.NewObjectID()
 	obj.CreateAt = t
 	obj.IsDisable = &stat
-	obj.UserOid = bson.ObjectIdHex(uoid)
+	obj.UserOid = puoid
 	obj.State = "待审核"
-	err = formdb.Insert(&obj)
+	_, err = formdb.InsertOne(context.Background(), &obj)
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
@@ -97,10 +102,7 @@ func (d *DbEngine) GetForm(w http.ResponseWriter, r *http.Request, ps httprouter
 		cond["state"] = state
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	c := d.GetColl(mg, "forms")
+	c := d.GetColl("forms")
 	query := make([]map[string]interface{}, 0)
 	query = append(query, bson.M{"$match": cond})
 	query = append(query, bson.M{"$lookup": bson.M{
@@ -117,17 +119,28 @@ func (d *DbEngine) GetForm(w http.ResponseWriter, r *http.Request, ps httprouter
 	}
 	query = append(query, bson.M{"$sort": bson.M{"createat": -1}})
 	var objs []map[string]interface{}
-	if err := c.Pipe(query).All(&objs); err != nil {
+	re, err := c.Aggregate(context.Background(), query)
+	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
-	ct, _ := c.Find(cond).Count()
-	resultor.RetOk(w, &objs, ct)
+	for re.Next(context.Background()) {
+		var m map[string]interface{}
+		_ = re.Decode(&m)
+		objs = append(objs, m)
+	}
+	ct, _ := c.CountDocuments(context.Background(), cond)
+	resultor.RetOk(w, &objs, int(ct))
 }
 
 func (d *DbEngine) PutForm(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	foid := ps.ByName("id")
-	if foid == "" || !InjectionPass([]byte(foid)) || !bson.IsObjectIdHex(foid) {
+	if foid == "" || !InjectionPass([]byte(foid)) {
+		resultor.RetErr(w, "1003")
+		return
+	}
+	fid, err := primitive.ObjectIDFromHex(foid)
+	if err != nil {
 		resultor.RetErr(w, "1003")
 		return
 	}
@@ -151,27 +164,49 @@ func (d *DbEngine) PutForm(w http.ResponseWriter, r *http.Request, ps httprouter
 		rs = "拒绝"
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	c := d.GetColl(mg, "forms")
+	c := d.GetColl("forms")
 	var form models.Form
-	err := c.Find(bson.M{"_id": bson.ObjectIdHex(foid), "state": "待审核"}).One(&form)
-	if err != nil {
+	re := c.FindOne(context.Background(), bson.M{"_id": fid, "state": "待审核"})
+	if re.Err() != nil {
 		resultor.RetErr(w, "该申请已被处理过")
 		return
 	}
+	_ = re.Decode(&form)
 
-	u := d.GetColl(mg, "users")
-	err = u.UpdateId(form.UserOid, bson.M{"$set": bson.M{"rule": "developer"}})
+	u := d.GetColl("users")
+
+	sess, err := d.GetSess()
 	if err != nil {
-		resultor.RetErr(w, err.Error())
+		resultor.RetErr(w, "事务开始失败")
 		return
 	}
+	defer sess.EndSession(context.Background())
 
-	err = c.UpdateId(bson.ObjectIdHex(foid), bson.M{"$set": bson.M{"state": "已完成", "result": rs}})
+	err = mongo.WithSession(context.Background(), sess, func(sessionContext mongo.SessionContext) error {
+		err := sessionContext.StartTransaction()
+		if err != nil {
+			return err
+		}
+		re = u.FindOneAndUpdate(sessionContext, bson.M{"_id": form.UserOid}, bson.M{"$set": bson.M{"rule": "developer"}})
+		if re.Err() != nil {
+			err = sessionContext.AbortTransaction(sessionContext)
+			if err != nil {
+				return err
+			}
+			return re.Err()
+		}
+		re = c.FindOneAndUpdate(context.Background(), bson.M{"_id": fid}, bson.M{"$set": bson.M{"state": "已完成", "result": rs}})
+		if re.Err() != nil {
+			err = sessionContext.AbortTransaction(sessionContext)
+			if err != nil {
+				return err
+			}
+			return errors.New("无效申请id")
+		}
+		return sessionContext.CommitTransaction(sessionContext)
+	})
 	if err != nil {
-		resultor.RetErr(w, "无效申请id")
+		resultor.RetErr(w, err.Error())
 		return
 	}
 

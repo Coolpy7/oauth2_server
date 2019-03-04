@@ -3,10 +3,13 @@ package auth
 import (
 	"auth/models"
 	"auth/resultor"
+	"context"
 	"github.com/jacoblai/httprouter"
 	"github.com/jacoblai/validation"
 	"github.com/pquerna/ffjson/ffjson"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -51,18 +54,22 @@ func (d *DbEngine) CreateApps(w http.ResponseWriter, r *http.Request, ps httprou
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
-	var u models.User
-	err = ag.FindId(bson.ObjectIdHex(uoid)).One(&u)
+	puoid, err := primitive.ObjectIDFromHex(uoid)
 	if err != nil {
-		resultor.RetErr(w, "用户不存在")
+		resultor.RetErr(w, "1003")
 		return
 	}
 
-	obj.Id = bson.NewObjectId()
+	ag := d.GetColl("users")
+	var u models.User
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid})
+	if re.Err() != nil {
+		resultor.RetErr(w, "用户不存在")
+		return
+	}
+	_ = re.Decode(&u)
+
+	obj.Id = primitive.NewObjectID()
 	obj.UserId = u.Id
 	obj.AppId = d.RandStringRunes(32)
 	obj.AppSecret = d.RandStringRunes(64)
@@ -70,14 +77,14 @@ func (d *DbEngine) CreateApps(w http.ResponseWriter, r *http.Request, ps httprou
 	stat := false
 	obj.IsDisable = &stat
 
-	appdb := d.GetColl(mg, "apps")
-	ct, _ := appdb.Find(bson.M{"name": obj.Name}).Count()
+	appdb := d.GetColl(models.T_APP)
+	ct, _ := appdb.CountDocuments(context.Background(), bson.M{"name": obj.Name})
 	if ct > 0 {
 		resultor.RetErr(w, "APP名称已被占用")
 		return
 	}
 
-	err = appdb.Insert(&obj)
+	_, err = appdb.InsertOne(context.Background(), &obj)
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
@@ -97,16 +104,20 @@ func (d *DbEngine) GetApps(w http.ResponseWriter, r *http.Request, ps httprouter
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
+	puoid, err := primitive.ObjectIDFromHex(uoid)
+	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
 
-	appdb := d.GetColl(mg, "apps")
+	appdb := d.GetColl("apps")
 	var apps []models.App
-	err := appdb.Find(bson.M{"user_id": bson.ObjectIdHex(uoid)}).All(&apps)
+	re, err := appdb.Find(context.Background(), bson.M{"user_id": puoid})
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
+	_ = re.Decode(&apps)
 
 	resultor.RetOk(w, apps, len(apps))
 }
@@ -128,16 +139,20 @@ func (d *DbEngine) GetApp(w http.ResponseWriter, r *http.Request, ps httprouter.
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
+	puoid, err := primitive.ObjectIDFromHex(uoid)
+	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
 
-	appdb := d.GetColl(mg, "apps")
+	appdb := d.GetColl("apps")
 	var app models.App
-	err := appdb.Find(bson.M{"user_id": bson.ObjectIdHex(uoid), "app_id": appid}).One(&app)
+	re := appdb.FindOne(context.Background(), bson.M{"user_id": puoid, "app_id": appid})
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
+	_ = re.Decode(&app)
 
 	resultor.RetOk(w, app, 1)
 }
@@ -151,16 +166,14 @@ func (d *DbEngine) GetPubApp(w http.ResponseWriter, r *http.Request, ps httprout
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	appdb := d.GetColl(mg, "apps")
+	appdb := d.GetColl("apps")
 	var app map[string]interface{}
-	err := appdb.Find(bson.M{"app_id": appid}).Select(bson.M{"name": 1, "avatar": 1}).One(&app)
-	if err != nil {
-		resultor.RetErr(w, err.Error())
+	re := appdb.FindOne(context.Background(), bson.M{"app_id": appid}, options.FindOne().SetProjection(bson.M{"name": 1, "avatar": 1}))
+	if re.Err() != nil {
+		resultor.RetErr(w, re.Err().Error())
 		return
 	}
+	_ = re.Decode(&app)
 
 	resultor.RetOk(w, app, 1)
 }
@@ -209,20 +222,24 @@ func (d *DbEngine) AppAvatar(w http.ResponseWriter, r *http.Request, ps httprout
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
-	var u models.User
-	err = ag.FindId(bson.ObjectIdHex(uoid)).One(&u)
+	puoid, err := primitive.ObjectIDFromHex(uoid)
 	if err != nil {
-		resultor.RetErr(w, "用户不存在")
+		resultor.RetErr(w, "1003")
 		return
 	}
 
-	appdb := d.GetColl(mg, "apps")
-	err = appdb.Update(bson.M{"user_id": u.Id, "app_id": appid}, bson.M{"$set": bson.M{"avatar": obj["avatar"]}})
-	if err != nil {
+	ag := d.GetColl("users")
+	var u models.User
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid})
+	if re.Err() != nil {
+		resultor.RetErr(w, "用户不存在")
+		return
+	}
+	_ = re.Decode(&u)
+
+	appdb := d.GetColl("apps")
+	re = appdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": u.Id, "app_id": appid}, bson.M{"$set": bson.M{"avatar": obj["avatar"]}})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
@@ -247,20 +264,24 @@ func (d *DbEngine) AppNewSecret(w http.ResponseWriter, r *http.Request, ps httpr
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
-	var u models.User
-	err := ag.FindId(bson.ObjectIdHex(uoid)).One(&u)
+	puoid, err := primitive.ObjectIDFromHex(uoid)
 	if err != nil {
-		resultor.RetErr(w, "用户不存在")
+		resultor.RetErr(w, "1003")
 		return
 	}
 
-	appdb := d.GetColl(mg, "apps")
-	err = appdb.Update(bson.M{"user_id": u.Id, "app_id": appid}, bson.M{"$set": bson.M{"app_secret": d.RandStringRunes(64)}})
-	if err != nil {
+	ag := d.GetColl("users")
+	var u models.User
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid})
+	if re.Err() != nil {
+		resultor.RetErr(w, "用户不存在")
+		return
+	}
+	_ = re.Decode(&u)
+
+	appdb := d.GetColl("apps")
+	re = appdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": u.Id, "app_id": appid}, bson.M{"$set": bson.M{"app_secret": d.RandStringRunes(64)}})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
@@ -282,6 +303,12 @@ func (d *DbEngine) AppUpdate(w http.ResponseWriter, r *http.Request, ps httprout
 	rule := r.Header.Get("rule")
 	if rule != "admin" && rule != "developer" {
 		resultor.RetErr(w, "账号权限不足")
+		return
+	}
+
+	puoid, err := primitive.ObjectIDFromHex(uoid)
+	if err != nil {
+		resultor.RetErr(w, "1003")
 		return
 	}
 
@@ -315,19 +342,17 @@ func (d *DbEngine) AppUpdate(w http.ResponseWriter, r *http.Request, ps httprout
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
+	ag := d.GetColl("users")
 	var u models.User
-	err = ag.FindId(bson.ObjectIdHex(uoid)).One(&u)
-	if err != nil {
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid})
+	if re.Err() != nil {
 		resultor.RetErr(w, "用户不存在")
 		return
 	}
+	_ = re.Decode(&u)
 
-	appdb := d.GetColl(mg, "apps")
-	err = appdb.Update(bson.M{"user_id": u.Id, "app_id": appid}, bson.M{"$set": obj})
+	appdb := d.GetColl("apps")
+	re = appdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": u.Id, "app_id": appid}, bson.M{"$set": obj})
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
@@ -353,20 +378,24 @@ func (d *DbEngine) AppDelete(w http.ResponseWriter, r *http.Request, ps httprout
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
-	var u models.User
-	err := ag.FindId(bson.ObjectIdHex(uoid)).One(&u)
+	puoid, err := primitive.ObjectIDFromHex(uoid)
 	if err != nil {
-		resultor.RetErr(w, "用户不存在")
+		resultor.RetErr(w, "1003")
 		return
 	}
 
-	appdb := d.GetColl(mg, "apps")
-	err = appdb.Remove(bson.M{"user_id": u.Id, "app_id": appid})
-	if err != nil {
+	ag := d.GetColl("users")
+	var u models.User
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid})
+	if re.Err() != nil {
+		resultor.RetErr(w, "用户不存在")
+		return
+	}
+	_ = re.Decode(&u)
+
+	appdb := d.GetColl("apps")
+	re = appdb.FindOneAndDelete(context.Background(), bson.M{"user_id": u.Id, "app_id": appid})
+	if re.Err() != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}

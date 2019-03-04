@@ -3,6 +3,7 @@ package auth
 import (
 	"auth/models"
 	"auth/resultor"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
@@ -13,7 +14,9 @@ import (
 	"github.com/jacoblai/validation"
 	"github.com/pquerna/ffjson/ffjson"
 	"github.com/satori/go.uuid"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -62,23 +65,21 @@ func (d *DbEngine) SendRegSms(w http.ResponseWriter, r *http.Request, ps httprou
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
 	if reg, ok := obj["reg"]; ok {
 		if reged, ok := reg.(bool); ok && reged {
-			ag := d.GetColl(mg, "users")
+			ag := d.GetColl("users")
 			var u models.User
-			err = ag.Find(bson.M{"phone": obj["phone"]}).One(&u)
-			if err != nil {
+			re := ag.FindOne(context.Background(), bson.M{"phone": obj["phone"]})
+			if re.Err() != nil {
 				resultor.RetErr(w, "用户不存在")
 				return
 			}
+			_ = re.Decode(&u)
 		}
 	}
 
-	s := d.GetColl(mg, "smss")
-	ct, _ := s.Find(bson.M{"phone": obj["phone"]}).Count()
+	s := d.GetColl("smss")
+	ct, _ := s.CountDocuments(context.Background(), bson.M{"phone": obj["phone"]})
 	if ct > 0 {
 		resultor.RetErr(w, "已有生效的验证码，验证码十五分钟内均有效")
 		return
@@ -86,13 +87,16 @@ func (d *DbEngine) SendRegSms(w http.ResponseWriter, r *http.Request, ps httprou
 
 	vcode := fmt.Sprintf("%06v", d.rnd.Int31n(1000000))
 
-	cfdb := d.GetColl(mg, "configs")
+	cid, _ := primitive.ObjectIDFromHex("5bae43aa53c61312eec64c04")
+
+	cfdb := d.GetColl("configs")
 	var config models.Config
-	err = cfdb.FindId(bson.ObjectIdHex("5bae43aa53c61312eec64c04")).One(&config)
-	if err != nil {
+	re := cfdb.FindOne(context.Background(), bson.M{"_id": cid})
+	if re.Err() != nil {
 		resultor.RetErr(w, "当前系统没有配置阿里云通信短信参数")
 		return
 	}
+	_ = re.Decode(&config)
 
 	id, _ := uuid.NewV4()
 	// send to one person
@@ -107,12 +111,12 @@ func (d *DbEngine) SendRegSms(w http.ResponseWriter, r *http.Request, ps httprou
 	}
 
 	ms := models.Sms{
-		Id:       bson.NewObjectId(),
+		Id:       primitive.NewObjectID(),
 		CreateAt: time.Now().Local(),
 		Phone:    obj["phone"].(string),
 		Code:     vcode,
 	}
-	err = s.Insert(&ms)
+	_, err = s.InsertOne(context.Background(), &ms)
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
@@ -124,17 +128,20 @@ func (d *DbEngine) SendRegSms(w http.ResponseWriter, r *http.Request, ps httprou
 func (d *DbEngine) Profile(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	//用户信息
 	uoid := r.Header.Get("uoid")
-
-	mg := d.GetSess()
-	defer mg.Close()
-
-	ag := d.GetColl(mg, "users")
-	var u map[string]interface{}
-	err := ag.FindId(bson.ObjectIdHex(uoid)).Select(bson.M{"pwd": 0}).One(&u)
+	puoid, err := primitive.ObjectIDFromHex(uoid)
 	if err != nil {
+		resultor.RetErr(w, "1003")
+		return
+	}
+
+	ag := d.GetColl("users")
+	var u map[string]interface{}
+	re := ag.FindOne(context.Background(), bson.M{"_id": puoid}, options.FindOne().SetProjection(bson.M{"pwd": 0}))
+	if re.Err() != nil {
 		resultor.RetErr(w, "用户不存在")
 		return
 	}
+	_ = re.Decode(&u)
 
 	resultor.RetOk(w, u, 1)
 }
@@ -179,23 +186,21 @@ func (d *DbEngine) SendMail(w http.ResponseWriter, r *http.Request, ps httproute
 		return
 	}
 
-	mg := d.GetSess()
-	defer mg.Close()
-
 	if reg, ok := obj["reg"]; ok {
 		if reged, ok := reg.(bool); ok && reged {
-			ag := d.GetColl(mg, "users")
+			ag := d.GetColl("users")
 			var u models.User
-			err = ag.Find(bson.M{"mail": obj["mail"]}).One(&u)
-			if err != nil {
+			re := ag.FindOne(context.Background(), bson.M{"mail": obj["mail"]})
+			if re.Err() != nil {
 				resultor.RetErr(w, "用户不存在")
 				return
 			}
+			_ = re.Decode(&u)
 		}
 	}
 
-	s := d.GetColl(mg, "smss")
-	ct, _ := s.Find(bson.M{"phone": obj["mail"]}).Count()
+	s := d.GetColl("smss")
+	ct, _ := s.CountDocuments(context.Background(), bson.M{"phone": obj["mail"]})
 	if ct > 0 {
 		resultor.RetErr(w, "已有生效的验证码，验证码十五分钟内均有效")
 		return
@@ -206,10 +211,12 @@ func (d *DbEngine) SendMail(w http.ResponseWriter, r *http.Request, ps httproute
 	subject := "邮箱验证"
 	mailbody := `<html><body><h3>验证码：` + vcode + `</h3></body></html>`
 
-	cfdb := d.GetColl(mg, "configs")
+	cid, _ := primitive.ObjectIDFromHex("5bae43aa53c61312eec64c04")
+	cfdb := d.GetColl("configs")
 	var config models.Config
-	err = cfdb.FindId(bson.ObjectIdHex("5bae43aa53c61312eec64c04")).One(&config)
-	if err == nil && strings.Contains(config.MailBody, ":vcode") {
+	re := cfdb.FindOne(context.Background(), bson.M{"_id": cid})
+	if re.Err() == nil && strings.Contains(config.MailBody, ":vcode") {
+		_ = re.Decode(&config)
 		subject = config.MailSubject
 		mailbody = strings.Replace(config.MailBody, ":vcode", vcode, -1)
 	}
@@ -221,12 +228,12 @@ func (d *DbEngine) SendMail(w http.ResponseWriter, r *http.Request, ps httproute
 	}
 
 	ms := models.Sms{
-		Id:       bson.NewObjectId(),
+		Id:       primitive.NewObjectID(),
 		CreateAt: time.Now().Local(),
 		Phone:    obj["mail"].(string),
 		Code:     vcode,
 	}
-	err = s.Insert(&ms)
+	_, err = s.InsertOne(context.Background(), &ms)
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
