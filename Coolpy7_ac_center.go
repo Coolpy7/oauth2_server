@@ -119,7 +119,7 @@ func main() {
 	//app pub
 	router.GET("/api/v1/pub/app/:id", eng.LimitHandler(eng.GetPubApp, lmt))
 	//system config
-	router.GET("/api/v1/configs", eng.LimitHandler(eng.GetConfig, lmt))
+	router.GET("/api/v1/configs", eng.LimitHandler(eng.Auth(eng.GetConfig), lmt))
 	router.PUT("/api/v1/config", eng.LimitHandler(eng.Auth(eng.PutConfig), lmt))
 
 	//router.ServeFiles("/*filepath", http.Dir(realdir+"/www"))

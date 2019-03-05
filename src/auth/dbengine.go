@@ -266,6 +266,26 @@ func (d *DbEngine) Open(mg, mdb, domain, playdomain, sk string, init int) error 
 		}
 		res = InitDbAndColl(session, mdb, "configs", GenJsonSchema(&models.Config{}))
 		log.Println(res)
+		c := session.Database(mdb).Collection("configs")
+		cid, _ := primitive.ObjectIDFromHex("5bae43aa53c61312eec64c04")
+		ct, _ = c.CountDocuments(context.Background(), bson.M{"_id": cid})
+		if ct == 0 {
+			var obj models.Config
+			obj.Id = cid
+			obj.Header = ""
+			obj.RegPaper = ""
+			obj.Help = ""
+			obj.AuthIcon = ""
+			obj.AuthPaper = ""
+			obj.AuthWaring = ""
+			obj.MailAlias = ""
+			obj.MailService = ""
+			obj.MailSubject = ""
+			obj.MailBody = ""
+			obj.SmsSign = ""
+			obj.SmsTemplate = ""
+			_, _ = c.InsertOne(context.Background(), &obj)
+		}
 
 		session.Disconnect(context.Background())
 	}
