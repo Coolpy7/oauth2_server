@@ -80,16 +80,20 @@ func (d *DbEngine) PhotoGet(w http.ResponseWriter, r *http.Request, ps httproute
 		bt, err := bucket.Find(bson.M{"_id": foid})
 		if err == nil {
 			for bt.Next(context.Background()) {
-				var fileinfo map[string]interface{}
-				_ = bt.Decode(&fileinfo)
-				w.Header().Set("Content-Type", fileinfo["Content-Type"].(string))
-				break
+				//{"_id": {"$oid":5c7de426e9644d5bd5624093},"length": {"$numberLong":"12527"},"chunkSize": {"$numberInt":"261120"},"uploadDate": {"$date":{"$numberLong":"1551754278850"}},"filename": "5c7de426e9644d5bd5624093.png","metadata": {"Content-type": "image/png","Ext": "png"}}
+				w.Header().Set("Content-Type", bt.Current.Lookup("Content-type").String())
+				bts := make([]byte, bt.Current.Lookup("length").Int64())
+				sm, err := bucket.OpenDownloadStream(foid)
+				if err != nil {
+					resultor.RetErr(w, "头像不存在")
+					return
+				}
+				_, _ = sm.Read(bts)
+				_, _ = w.Write(bts)
+				return
 			}
 		}
-		_, err = bucket.DownloadToStream(foid, w)
-		if err != nil {
-			resultor.RetErr(w, "头像不存在")
-			return
-		}
 	}
+
+	resultor.RetErr(w, "avatar not found")
 }
