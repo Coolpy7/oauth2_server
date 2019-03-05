@@ -63,7 +63,7 @@ func main() {
 	}
 
 	eng := auth.NewDbEngine()
-	err = eng.Open(*mongo, "coolpy7", *domain, *playdomain, *jk, 1)
+	err = eng.Open(*mongo, "cp7_oauth2", *domain, *playdomain, *jk, 1)
 	if err != nil {
 		log.Fatal("database connect error")
 	}
