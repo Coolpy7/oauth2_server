@@ -30,8 +30,8 @@ func main() {
 		alikey     = flag.String("ak", "", "阿里云平台访问key")
 		addr       = flag.String("l", ":8000", "端口号")
 		mongo      = flag.String("m", "mongodb://localhost:27017", "mongodb数据库连接字符串")
-		domain     = flag.String("dm", "https://test.icoolpy.com:8000", "本程序公网域名")
-		playdomain = flag.String("pdm", "http://test.icoolpy.com:3000", "前端公网域名")
+		domain     = flag.String("dm", "https://192.168.190.167:8000", "本程序公网域名")
+		playdomain = flag.String("pdm", "http://192.168.190.167:3000", "前端公网域名")
 	)
 	flag.Parse()
 

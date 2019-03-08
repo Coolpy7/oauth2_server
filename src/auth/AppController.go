@@ -117,7 +117,11 @@ func (d *DbEngine) GetApps(w http.ResponseWriter, r *http.Request, ps httprouter
 		resultor.RetErr(w, err.Error())
 		return
 	}
-	_ = re.Decode(&apps)
+	for re.Next(context.Background()) {
+		var app models.App
+		_ = re.Decode(&app)
+		apps = append(apps, app)
+	}
 
 	resultor.RetOk(w, apps, len(apps))
 }
@@ -173,7 +177,10 @@ func (d *DbEngine) GetPubApp(w http.ResponseWriter, r *http.Request, ps httprout
 		resultor.RetErr(w, re.Err().Error())
 		return
 	}
-	_ = re.Decode(&app)
+	err := re.Decode(&app)
+	if err != nil {
+		resultor.RetErr(w, err.Error())
+	}
 
 	resultor.RetOk(w, app, 1)
 }
