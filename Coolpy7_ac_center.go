@@ -26,8 +26,8 @@ func init() {
 func main() {
 	var (
 		jk         = flag.String("jk", "Coolpy7yeah", "jwt密钥")
-		aliid      = flag.String("ai", "", "阿里云平台访问id")
-		alikey     = flag.String("ak", "", "阿里云平台访问key")
+		aliid      = flag.String("ai", "", "阿里云AccessKey ID")
+		alikey     = flag.String("ak", "", "阿里云Access Key Secret")
 		addr       = flag.String("l", ":8000", "端口号")
 		mongo      = flag.String("m", "mongodb://localhost:27017", "mongodb数据库连接字符串")
 		domain     = flag.String("dm", "https://192.168.190.167:8000", "本程序公网域名")
@@ -122,8 +122,6 @@ func main() {
 	router.GET("/api/v1/configs", eng.LimitHandler(eng.Auth(eng.GetConfig), lmt))
 	router.PUT("/api/v1/config", eng.LimitHandler(eng.Auth(eng.PutConfig), lmt))
 
-	//router.ServeFiles("/*filepath", http.Dir(realdir+"/www"))
-
 	srv := &http.Server{Handler: auth.CORS(router), ErrorLog: nil}
 	cert, err := tls.LoadX509KeyPair(dir+"/server.pem", dir+"/server.key")
 	if err != nil {
@@ -139,6 +137,17 @@ func main() {
 		}
 	}()
 	log.Println("server on tls port", *addr)
+
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(realdir+"/build/static/"))))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, realdir+"/build/index.html")
+	})
+	go func() {
+		if err := http.ListenAndServe(":9000", nil); err != nil {
+			log.Fatal(err)
+		}
+	}()
+	log.Println("web on port 9000")
 
 	signalChan := make(chan os.Signal, 1)
 	cleanupDone := make(chan bool)
