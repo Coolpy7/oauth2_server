@@ -16,7 +16,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -389,25 +388,16 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 		return
 	}
 
-	log.Println(string(body))
 	qr, err := url.ParseQuery(string(body))
 	if err != nil {
 		resultor.RetErr(w, "1002")
 		return
 	}
 
-	code := qr.Get("code")
-	grant_type := qr.Get("grant_type") //authorization_code
-	redirect_uri := qr.Get("redirect_uri")
+	userId := qr.Get("user_id")
+	userPwd := qr.Get("user_pwd")
 	appid := qr.Get("client_id")
 	secret := qr.Get("client_secret")
-
-	log.Println(grant_type, redirect_uri)
-
-	if m, _ := regexp.MatchString(`^[a-z0-9_]+$`, code); !m || len(code) != 32 {
-		resultor.RetErr(w, "invalid_code")
-		return
-	}
 
 	if m, _ := regexp.MatchString(`^[a-z0-9_]+$`, appid); !m || len(appid) != 32 {
 		resultor.RetErr(w, "invalid_appid")
@@ -419,29 +409,32 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 		return
 	}
 
-	codedb := d.GetColl("codes")
-	var ocd models.Code
-	re := codedb.FindOne(context.Background(), bson.M{"code": code})
+	dls := d.GetColl(models.T_DenyLogin)
+	var dl models.DenyLogin
+	re := dls.FindOne(context.Background(), bson.M{"uid": userId})
 	if re.Err() != nil {
-		resultor.RetErr(w, "invalid_code_notfound")
+		resultor.RetErr(w, re.Err().Error())
 		return
 	}
-	_ = re.Decode(&ocd)
-	codedb.FindOneAndDelete(context.Background(), bson.M{"code": code})
-
-	if ocd.AppId != appid {
-		resultor.RetErr(w, "invalid_appid_notfound")
+	_ = re.Decode(&dl)
+	if dl.Count != nil && *dl.Count >= 5 {
+		resultor.RetErr(w, "已超过容错次数，请十五分钟后再试")
 		return
 	}
 
 	appdb := d.GetColl("apps")
 	var app models.App
-	re = appdb.FindOne(context.Background(), bson.M{"app_id": appid, "app_secret": secret})
+	re = appdb.FindOne(context.Background(), bson.M{"app_id": appid})
 	if re.Err() != nil {
-		resultor.RetErr(w, "invalid_appsecret_notfound")
+		resultor.RetErr(w, "invalid_app_notfound")
 		return
 	}
 	_ = re.Decode(&app)
+
+	if app.AppSecret != secret {
+		resultor.RetErr(w, "invalid_appsecret_error")
+		return
+	}
 
 	//safe, _ := url.Parse(app.SafeRequest)
 	//if r.Host != safe.Host {
@@ -449,22 +442,35 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 	//	return
 	//}
 
-	//判断授权信息是否已被回收授权
-	authdb := d.GetColl("auths")
-	act, _ := authdb.CountDocuments(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId})
-	if act == 0 {
-		resultor.RetErr(w, "invalid_oauth_reject")
-		return
-	}
-
 	ag := d.GetColl("users")
-	var u models.User
-	re = ag.FindOne(context.Background(), ocd.UserId)
+	var user models.User
+	re = ag.FindOne(context.Background(), bson.M{"_id": userId})
 	if re.Err() != nil {
 		resultor.RetErr(w, "授权用户不存在")
 		return
 	}
-	_ = re.Decode(&u)
+	_ = re.Decode(&user)
+	opwdbts, err := hex.DecodeString(user.Pwd)
+	if err != nil {
+		resultor.RetErr(w, "系统内部密码组件异常")
+		return
+	}
+	opwd := jcrypt.MsgDecode(opwdbts)
+	if !bytes.Equal([]byte(userPwd), opwd) {
+		if dl.Count == nil {
+			nv := float64(1)
+			_, _ = dls.InsertOne(context.Background(), models.DenyLogin{
+				Id:       primitive.NewObjectID(),
+				CreateAt: time.Now().Local(),
+				Uid:      user.Uid,
+				Count:    &nv,
+			})
+		} else {
+			dls.FindOneAndUpdate(context.Background(), bson.M{"uid": user.Uid}, bson.M{"$inc": bson.M{"count": 1}})
+		}
+		resultor.RetErr(w, "登陆失败，密码错误")
+		return
+	}
 
 	refreshToken := d.RandStringRunes(128)
 	now := time.Now().Local()
@@ -475,18 +481,33 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 		ExpiresAt: eat,
 		Issuer:    "coolpy7_oauth",
 		IssuedAt:  now.Unix(),
-		Audience:  ocd.AppId,
-		Subject:   ocd.UserId.Hex(),
+		Audience:  app.AppId,
+		Subject:   user.Id.Hex(),
 	})
 	signtoken, err := token.SignedString(d.SigningKey)
 	if err != nil {
 		resultor.RetErr(w, err.Error())
 		return
 	}
-	re = authdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
-	if re.Err() != nil {
-		resultor.RetErr(w, err.Error())
-		return
+	//添加用户授权记录
+	authdb := d.GetColl("auths")
+	act, _ := authdb.CountDocuments(context.Background(), bson.M{"user_id": user.Id, "app_id": app.AppId})
+	if act == 0 {
+		rcode := models.Code{
+			Id:       primitive.NewObjectID(),
+			CreateAt: time.Now().Local(),
+			UserId:   user.Id,
+			Code:     refreshToken,
+			AppId:    app.AppId,
+			Scope:    "auto",
+		}
+		_, _ = authdb.InsertOne(context.Background(), &rcode)
+	} else {
+		re = authdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": user.Id, "app_id": app.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
+		if re.Err() != nil {
+			resultor.RetErr(w, err.Error())
+			return
+		}
 	}
 
 	res := make(map[string]interface{})
@@ -494,7 +515,7 @@ func (d *DbEngine) GetToken(w http.ResponseWriter, r *http.Request, ps httproute
 	res["token_type"] = "bearer"
 	res["expires_in"] = eat
 	res["refresh_token"] = refreshToken
-	res["scope"] = ocd.Scope
+	res["scope"] = "auto"
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 	bts, _ := ffjson.Marshal(res)
 	w.WriteHeader(http.StatusOK)
