@@ -259,6 +259,102 @@ func (d *DbEngine) Grant(w http.ResponseWriter, r *http.Request, ps httprouter.P
 	}
 }
 
+func (d *DbEngine) Grant2Token(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	qr := r.URL.Query()
+	code := qr.Get("code")
+
+	if !InjectionPass([]byte(code)) {
+		resultor.RetErr(w, "invalid_inject")
+		return
+	}
+
+	if m, _ := regexp.MatchString(`^[a-z0-9_]+$`, code); !m || len(code) != 32 {
+		resultor.RetErr(w, "invalid_code")
+		return
+	}
+
+	codedb := d.GetColl("codes")
+	var ocd models.Code
+	re := codedb.FindOne(context.Background(), bson.M{"code": code})
+	if re.Err() != nil {
+		resultor.RetErr(w, "invalid_code_notfound")
+		return
+	}
+	_ = re.Decode(&ocd)
+	codedb.FindOneAndDelete(context.Background(), bson.M{"code": code})
+
+	if ocd.AppId != ocd.AppId {
+		resultor.RetErr(w, "invalid_appid_notfound")
+		return
+	}
+
+	appdb := d.GetColl("apps")
+	var app models.App
+	re = appdb.FindOne(context.Background(), bson.M{"app_id": ocd.AppId})
+	if re.Err() != nil {
+		resultor.RetErr(w, "invalid_appsecret_notfound")
+		return
+	}
+	_ = re.Decode(&app)
+
+	//safe, _ := url.Parse(app.SafeRequest)
+	//if r.Host != safe.Host {
+	//	resultor.RetErr(w, "invalid_domain")
+	//	return
+	//}
+
+	//判断授权信息是否已被回收授权
+	authdb := d.GetColl("auths")
+	act, _ := authdb.CountDocuments(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId})
+	if act == 0 {
+		resultor.RetErr(w, "invalid_oauth_reject")
+		return
+	}
+
+	ag := d.GetColl("users")
+	var u models.User
+	re = ag.FindOne(context.Background(), ocd.UserId)
+	if re.Err() != nil {
+		resultor.RetErr(w, "授权用户不存在")
+		return
+	}
+	_ = re.Decode(&u)
+
+	refreshToken := d.RandStringRunes(128)
+	now := time.Now().Local()
+	eat := now.Add(2 * time.Hour).Unix()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
+		Id:        refreshToken,
+		NotBefore: now.Unix(),
+		ExpiresAt: eat,
+		Issuer:    "coolpy7_oauth",
+		IssuedAt:  now.Unix(),
+		Audience:  ocd.AppId,
+		Subject:   ocd.UserId.Hex(),
+	})
+	signtoken, err := token.SignedString(d.SigningKey)
+	if err != nil {
+		resultor.RetErr(w, err.Error())
+		return
+	}
+	re = authdb.FindOneAndUpdate(context.Background(), bson.M{"user_id": ocd.UserId, "app_id": ocd.AppId}, bson.M{"$set": bson.M{"code": refreshToken}})
+	if re.Err() != nil {
+		resultor.RetErr(w, err.Error())
+		return
+	}
+
+	res := make(map[string]interface{})
+	res["access_token"] = signtoken
+	res["token_type"] = "bearer"
+	res["expires_in"] = eat
+	res["refresh_token"] = refreshToken
+	res["scope"] = ocd.Scope
+	w.Header().Set("Content-Type", "application/json;charset=utf-8")
+	bts, _ := ffjson.Marshal(res)
+	w.WriteHeader(http.StatusOK)
+	w.Write(bts)
+}
+
 func ComputeHmac256(message string, secret string) string {
 	key := []byte(secret)
 	h := hmac.New(sha256.New, key)

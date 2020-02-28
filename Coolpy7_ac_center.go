@@ -112,6 +112,7 @@ func main() {
 	router.GET("/oauth2/authorize", eng.LimitHandler(eng.Authorize, lmt))
 	router.POST("/oauth2/login", eng.LimitHandler(eng.AuthLogin, lmt))
 	router.GET("/oauth2/grant", eng.LimitHandler(eng.Grant, lmt))
+	router.GET("/oauth2/grant2token", eng.LimitHandler(eng.Grant2Token, lmt))
 
 	router.POST("/oauth2/token", eng.LimitHandler(eng.GetToken, lmt))
 	router.GET("/oauth2/refresh", eng.LimitHandler(eng.RefreshToken, lmt))
